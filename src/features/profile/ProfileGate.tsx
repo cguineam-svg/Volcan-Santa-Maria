@@ -1,4 +1,5 @@
 import { supabase } from '../../lib/supabase';
+import { withOfflineCache } from '../../lib/offline-cache';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getAuthErrorMessage } from '../auth/auth-errors';
@@ -33,14 +34,16 @@ export function ProfileGate() {
 
     let active = true;
 
-    void Promise.resolve(supabase.from('user_roles').select('role').eq('user_id', user.id).single()).then(async ({ data, error }) => {
+    void withOfflineCache(`profile-gate:${user.id}`, async () => {
+      const { data, error } = await supabase.from('user_roles').select('role').eq('user_id', user.id).single();
       if (error) throw error;
-      if (data.role !== 'tourist') { if (active) setStaffAccount(true); return null; }
-      return Promise.all([loadTouristProfile(user.id), hasCurrentLegalConsent()]);
+      if (data.role !== 'tourist') return { staff: true as const };
+      const [loadedProfile, hasConsent] = await Promise.all([loadTouristProfile(user.id), hasCurrentLegalConsent()]);
+      return { staff: false as const, loadedProfile, hasConsent };
     })
       .then((result) => {
-        if (!result) return;
-        const [loadedProfile, hasConsent] = result;
+        if (result.staff) { if (active) setStaffAccount(true); return; }
+        const { loadedProfile, hasConsent } = result;
         if (!active) return;
 
         setProfile(loadedProfile);

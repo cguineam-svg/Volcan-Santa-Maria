@@ -1,4 +1,5 @@
 import { supabase } from '../../lib/supabase';
+import { preferFreshData, withOfflineCache } from '../../lib/offline-cache';
 import type {
   RouteCheckpoint,
   RouteCheckpointType,
@@ -125,7 +126,12 @@ export function getCachedRouteContent(key = SUMMIT_ROUTE_SLUG): RouteContent | n
   }
 }
 
-export async function getRouteContent(key = SUMMIT_ROUTE_SLUG): Promise<RouteContent> {
+export function getRouteContent(key = SUMMIT_ROUTE_SLUG): Promise<RouteContent> {
+  const saved = getCachedRouteContent(key);
+  return preferFreshData(() => fetchRouteContent(key), saved ? { value: saved } : null);
+}
+
+async function fetchRouteContent(key: string): Promise<RouteContent> {
   const { data: routeData, error: routeError } = await supabase
     .from('routes')
     .select(
@@ -198,7 +204,34 @@ export async function getRouteContent(key = SUMMIT_ROUTE_SLUG): Promise<RouteCon
 }
 
 export async function listAvailableRoutes(): Promise<RouteContent[]> {
-  const { data, error } = await supabase.from('routes').select('id').eq('is_active', true).not('asset_prefix', 'is', null).order('created_at');
-  if (error) throw error;
-  return Promise.all((data as Array<{ id: string }>).map((row) => getRouteContent(row.id)));
+  const rows = await withOfflineCache('available-routes', async () => {
+    const { data, error } = await supabase.from('routes').select('id').eq('is_active', true).not('asset_prefix', 'is', null).order('created_at');
+    if (error) throw error;
+    return data as Array<{ id: string }>;
+  });
+  return Promise.all(rows.map((row) => getRouteContent(row.id)));
+}
+
+let routesPreloaded = false;
+
+// On the first visit the worker is still saving the app when the routes arrive, and a
+// photo requested before it takes control would never reach its cache.
+async function serviceWorkerInControl(): Promise<void> {
+  if (!('serviceWorker' in navigator) || navigator.serviceWorker.controller) return;
+  await new Promise((resolve) => navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true }));
+}
+
+// Saves the routes and their photos while there is signal, even if the person never
+// opens them before starting the hike. The service worker keeps each photo it sees.
+export function preloadRoutesForOffline(): void {
+  if (routesPreloaded || !navigator.onLine) return;
+  routesPreloaded = true;
+  void listAvailableRoutes().then(async (routes) => {
+    const connection = (navigator as Navigator & { connection?: { saveData?: boolean } }).connection;
+    if (connection?.saveData) return;
+    await serviceWorkerInControl();
+    for (const media of routes.flatMap((route) => route.media)) {
+      if (media.publicUrl) await fetch(media.publicUrl).catch(() => undefined);
+    }
+  }).catch(() => { routesPreloaded = false; });
 }

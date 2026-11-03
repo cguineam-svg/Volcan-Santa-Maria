@@ -9,6 +9,12 @@ const LANGUAGE_STORAGE_KEY = 'volcan-santa-maria-language';
 const resources = {
   es: {
     translation: {
+      offline: {
+        notice: 'Sin conexión. Ves los últimos datos guardados; el mapa y tu ubicación siguen funcionando.',
+        actionNotSaved: 'Sin conexión: no se pudo completar y nada se guardó. Inténtalo de nuevo cuando tengas señal.',
+        mapSaved: 'Mapa guardado: funciona sin conexión.',
+        mapSaving: 'Guardando el mapa para usarlo sin conexión. Mantén la señal un momento.',
+      },
       common: {
         brand: 'Volcán Santa María',
         email: 'Correo electrónico',
@@ -840,6 +846,12 @@ const resources = {
   },
   en: {
     translation: {
+      offline: {
+        notice: 'You are offline. Showing the latest saved data; the map and your location keep working.',
+        actionNotSaved: 'You are offline: this could not be completed and nothing was saved. Try again when you have signal.',
+        mapSaved: 'Map saved: it works offline.',
+        mapSaving: 'Saving the map for offline use. Stay connected for a moment.',
+      },
       common: {
         brand: 'Santa María Volcano',
         email: 'Email address',

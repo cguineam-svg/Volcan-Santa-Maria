@@ -17,16 +17,16 @@ import { useTranslation } from 'react-i18next';
 import { getAppLanguage } from '../../../i18n';
 import type { RouteCheckpoint, RouteContent } from '../route-types';
 import { CheckpointMediaGallery } from './CheckpointMediaGallery';
+import { createOfflineMapStyle, OFFLINE_MAP_FILE } from './offline-map-style';
 
 setWorkerUrl(mapLibreWorkerUrl);
 
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const MAPTILER_KEY = import.meta.env.VITE_MAPTILER_KEY?.trim() || null;
 const SATELLITE_STYLE_URL = MAPTILER_KEY
   ? `https://api.maptiler.com/maps/hybrid-v4/style.json?key=${encodeURIComponent(MAPTILER_KEY)}`
   : null;
-const DEFAULT_BASE_MAP = SATELLITE_STYLE_URL ? 'satellite' : 'map';
-const DEFAULT_STYLE_URL = SATELLITE_STYLE_URL ?? MAP_STYLE_URL;
+const SATELLITE_TIMEOUT_MS = 8000;
+const initialBaseMap = (): BaseMap => (SATELLITE_STYLE_URL && navigator.onLine ? 'satellite' : 'map');
 const ACCURACY_SOURCE_ID = 'user-location-accuracy';
 const ACCURACY_FILL_LAYER_ID = 'user-location-accuracy-fill';
 const ACCURACY_LINE_LAYER_ID = 'user-location-accuracy-line';
@@ -123,9 +123,10 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
   const [mapAttempt, setMapAttempt] = useState(0);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [mapFailed, setMapFailed] = useState(false);
-  const [baseMap, setBaseMap] = useState<BaseMap>(DEFAULT_BASE_MAP);
+  const [baseMap, setBaseMap] = useState<BaseMap>(initialBaseMap);
   const [styleSwitching, setStyleSwitching] = useState(false);
   const [satelliteLoadFailed, setSatelliteLoadFailed] = useState(false);
+  const [offlineMapSaved, setOfflineMapSaved] = useState(false);
   const [selection, setSelection] = useState<MapSelection>(null);
   const [locationStatus, setLocationStatus] = useState<
     'idle' | 'locating' | 'active' | 'error'
@@ -168,7 +169,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
     });
   }, [route.id, routes]);
   const routeOverlaysRef = useRef(routeOverlays);
-  const baseMapRef = useRef<BaseMap>(DEFAULT_BASE_MAP);
+  const baseMapRef = useRef<BaseMap>(initialBaseMap());
   const pendingBaseMapRef = useRef<BaseMap | null>(null);
   const fallbackInProgressRef = useRef(false);
   const selectedCheckpoint =
@@ -200,14 +201,33 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
     let active = true;
     let map: Map | null = null;
     let resizeObserver: ResizeObserver | null = null;
+    let satelliteTimer = 0;
+
+    const fallBackToLocalMap = () => {
+      window.clearTimeout(satelliteTimer);
+      pendingBaseMapRef.current = null;
+      setStyleSwitching(false);
+      baseMapRef.current = 'map';
+      fallbackInProgressRef.current = true;
+      setBaseMap('map');
+      setSatelliteLoadFailed(true);
+      try {
+        map?.setStyle(createOfflineMapStyle());
+      } catch {
+        fallbackInProgressRef.current = false;
+        setMapFailed(true);
+      }
+    };
 
     try {
-      baseMapRef.current = DEFAULT_BASE_MAP;
+      const startingBaseMap = initialBaseMap();
+      baseMapRef.current = startingBaseMap;
       pendingBaseMapRef.current =
-        DEFAULT_BASE_MAP === 'satellite' ? 'satellite' : null;
+        startingBaseMap === 'satellite' ? 'satellite' : null;
+      queueMicrotask(() => { if (active) setBaseMap(startingBaseMap); });
       map = new Map({
         container: containerRef.current,
-        style: DEFAULT_STYLE_URL,
+        style: startingBaseMap === 'satellite' && SATELLITE_STYLE_URL ? SATELLITE_STYLE_URL : createOfflineMapStyle(),
         center: VOLCANO_CENTER,
         zoom: INITIAL_ZOOM,
         dragPan: true,
@@ -215,6 +235,12 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
       });
       mapRef.current = map;
       fittedRoutesRef.current = '';
+      // A weak signal can leave the satellite style hanging without ever failing.
+      if (startingBaseMap === 'satellite') {
+        satelliteTimer = window.setTimeout(() => {
+          if (active && pendingBaseMapRef.current === 'satellite') fallBackToLocalMap();
+        }, SATELLITE_TIMEOUT_MS);
+      }
       resizeObserver = new ResizeObserver(() => {
         if (!map || !active) return;
         map.resize();
@@ -237,6 +263,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
       map.on('style.load', () => {
         if (!map) return;
 
+        window.clearTimeout(satelliteTimer);
         const appliedBaseMap = pendingBaseMapRef.current ?? baseMapRef.current;
         baseMapRef.current = appliedBaseMap;
         syncRouteLayers(map, routeOverlaysRef.current, appliedBaseMap);
@@ -267,21 +294,19 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
           setStyleSwitching(false);
 
           if (pendingBaseMap === 'satellite' && map) {
-            baseMapRef.current = 'map';
-            fallbackInProgressRef.current = true;
-            setBaseMap('map');
-            setSatelliteLoadFailed(true);
-            try {
-              map.setStyle(MAP_STYLE_URL);
-            } catch {
-              fallbackInProgressRef.current = false;
-              setMapFailed(true);
-            }
+            fallBackToLocalMap();
             return;
           }
         }
 
-        if (!loaded && !fallbackInProgressRef.current) {
+        if (baseMapRef.current === 'satellite' && !navigator.onLine) {
+          fallBackToLocalMap();
+          return;
+        }
+
+        // The local style cannot fail as a whole: a missing tile or glyph only leaves
+        // a gap, and the route stays visible on top of it.
+        if (!loaded && !fallbackInProgressRef.current && baseMapRef.current !== 'map') {
           setMapFailed(true);
           setMapLoaded(false);
         }
@@ -296,6 +321,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
 
     return () => {
       active = false;
+      window.clearTimeout(satelliteTimer);
       resizeObserver?.disconnect();
       if (stopWatchRef.current !== null && navigator.geolocation) {
         stopWatchRef.current();
@@ -311,6 +337,25 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
       map?.remove();
     };
   }, [mapAttempt]);
+
+  useEffect(() => {
+    if (!('caches' in window)) return;
+    let active = true;
+    let timer = 0;
+    // The service worker saves the map in the background after the first visit.
+    const check = () => {
+      void caches.match(OFFLINE_MAP_FILE).then((saved) => {
+        if (!active) return;
+        if (saved) setOfflineMapSaved(true);
+        else timer = window.setTimeout(check, 2000);
+      });
+    };
+    check();
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     routeOverlaysRef.current = routeOverlays;
@@ -503,7 +548,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
     if (!map) return;
 
     const nextStyle =
-      nextBaseMap === 'satellite' ? SATELLITE_STYLE_URL : MAP_STYLE_URL;
+      nextBaseMap === 'satellite' ? SATELLITE_STYLE_URL : createOfflineMapStyle();
     if (!nextStyle) return;
 
     pendingBaseMapRef.current = nextBaseMap;
@@ -521,7 +566,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
       setStyleSwitching(false);
       setSatelliteLoadFailed(nextBaseMap === 'satellite');
       try {
-        map.setStyle(MAP_STYLE_URL);
+        map.setStyle(createOfflineMapStyle());
       } catch {
         fallbackInProgressRef.current = false;
         setMapFailed(true);
@@ -716,6 +761,7 @@ export function RouteMap({ route, onChangeRoute }: RouteMapProps) {
       {alternativeFailed && <p className="route-map-note" role="status">{t('final.alternativeUnavailable')}{' '}
         <button type="button" className="text-button" onClick={() => { setAlternativeFailed(false); setRouteAttempt((attempt) => attempt + 1); }}>{t('profile.retry')}</button>
       </p>}
+      <p className="route-map-note" role="status">{t(offlineMapSaved ? 'offline.mapSaved' : 'offline.mapSaving')}</p>
       <div className="route-location-status" aria-live="polite">
         {locationStatus === 'locating' && <p>{t('routes.map.locating')}</p>}
         {livePosition && (

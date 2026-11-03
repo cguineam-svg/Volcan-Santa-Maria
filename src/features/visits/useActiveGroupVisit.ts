@@ -7,6 +7,7 @@ export function useActiveGroupVisit(currentUserId: string) {
   const [details, setDetails] = useState<GroupVisitDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const hasVisit = details !== null;
 
   const openVisit = useCallback(
     async (visitId: string) => {
@@ -35,7 +36,9 @@ export function useActiveGroupVisit(currentUserId: string) {
   );
 
   const refreshActiveVisit = useCallback(async () => {
-    setLoading(true);
+    // A visit already on screen refreshes behind it: on a weak signal, coming back
+    // to the app must not hide the map behind a loading message.
+    if (!hasVisit) setLoading(true);
     setError(null);
 
     try {
@@ -51,7 +54,7 @@ export function useActiveGroupVisit(currentUserId: string) {
     } finally {
       setLoading(false);
     }
-  }, [openVisit]);
+  }, [hasVisit, openVisit]);
 
   const refreshDetails = useCallback(async () => {
     if (

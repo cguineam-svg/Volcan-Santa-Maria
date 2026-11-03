@@ -4511,3 +4511,15 @@ button:disabled {
 .adult-minors > strong { font-size: 0.8rem; }
 .participants-list .adult-minors ul { padding: 0; margin: 6px 0 0; list-style: none; }
 .participants-list .adult-minors li { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 6px 0; overflow-wrap: anywhere; }
+
+.offline-notice {
+  position: sticky;
+  z-index: 15;
+  top: 0;
+  margin: 0;
+  padding: 8px 16px;
+  background: #6b5233;
+  color: #ffffff;
+  font-size: 0.875rem;
+  text-align: center;
+}

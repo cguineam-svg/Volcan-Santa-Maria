@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { isAdult, isValidPassword } from '../../../shared/account-policy';
 import { supabase } from '../../lib/supabase';
+import { setOfflineCacheOwner } from '../../lib/offline-cache';
 import {
   AuthContext,
   type AuthContextValue,
@@ -17,6 +18,22 @@ type AuthProviderProps = {
   children: ReactNode;
 };
 
+// supabase-js answers with no session when an expired token cannot be refreshed for
+// lack of network, but keeps it stored. It removes it when the session is really invalid,
+// so a stored session here means the person is still signed in on this device.
+function readStoredSession(): Session | null {
+  try {
+    const projectRef = new URL(import.meta.env.VITE_SUPABASE_URL).hostname.split('.')[0];
+    const stored = window.localStorage.getItem(`sb-${projectRef}-auth-token`);
+    const session = stored ? (JSON.parse(stored) as Session) : null;
+    return session?.user ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+const SESSION_CHECK_TIMEOUT_MS = 3000;
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -26,13 +43,34 @@ export function AuthProvider({ children }: AuthProviderProps) {
   useEffect(() => {
     let isMounted = true;
 
+    const applySession = (nextSession: Session | null) => {
+      const resolvedSession = nextSession ?? readStoredSession();
+      setSession(resolvedSession);
+      setUser(resolvedSession?.user ?? null);
+      setOfflineCacheOwner(resolvedSession?.user.id ?? null);
+    };
+
+    // On a weak signal the refresh can hang without failing.
+    const sessionCheckTimer = window.setTimeout(() => {
+      const storedSession = readStoredSession();
+      if (!isMounted || !storedSession) return;
+      setSession((current) => current ?? storedSession);
+      setUser((current) => current ?? storedSession.user);
+      setLoading(false);
+    }, SESSION_CHECK_TIMEOUT_MS);
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!isMounted) return;
 
-      setSession(nextSession);
-      setUser(nextSession?.user ?? null);
+      if (event === 'SIGNED_OUT') {
+        setSession(null);
+        setUser(null);
+        setOfflineCacheOwner(null);
+      } else {
+        applySession(nextSession);
+      }
       if (event === 'PASSWORD_RECOVERY') {
         setIsPasswordRecovery(true);
       } else if (event === 'SIGNED_OUT') {
@@ -47,21 +85,21 @@ export function AuthProvider({ children }: AuthProviderProps) {
         if (!isMounted) return;
         if (error) throw error;
 
-        setSession(data.session);
-        setUser(data.session?.user ?? null);
+        applySession(data.session);
       })
       .catch(() => {
         if (!isMounted) return;
 
-        setSession(null);
-        setUser(null);
+        applySession(null);
       })
       .finally(() => {
+        window.clearTimeout(sessionCheckTimer);
         if (isMounted) setLoading(false);
       });
 
     return () => {
       isMounted = false;
+      window.clearTimeout(sessionCheckTimer);
       subscription.unsubscribe();
     };
   }, []);

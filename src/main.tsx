@@ -20,5 +20,9 @@ createRoot(document.getElementById('root')!).render(
 );
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js'); });
+  window.addEventListener('load', () => {
+    void navigator.serviceWorker.register('/sw.js');
+    // Asks the browser not to evict the saved map and app when storage runs low.
+    void navigator.storage?.persist?.();
+  });
 }

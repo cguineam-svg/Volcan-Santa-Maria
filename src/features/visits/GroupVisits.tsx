@@ -1,8 +1,9 @@
 import { ChangeRouteDialog } from '../routes/ChangeRouteDialog';
 import { isAdult } from '../../../shared/account-policy';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RouteInfoScreen } from '../routes/RouteInfoScreen';
+import { preloadRoutesForOffline } from '../routes/route-service';
 import type { RouteTab } from '../routes/route-types';
 import { CreateVisitForm } from './CreateVisitForm';
 import { GroupVisitScreen } from './GroupVisitScreen';
@@ -38,6 +39,8 @@ export function GroupVisits({
     refreshDetails,
     clearVisit,
   } = useActiveGroupVisit(currentUserId);
+
+  useEffect(() => { preloadRoutesForOffline(); }, []);
 
   if (loading) {
     return (

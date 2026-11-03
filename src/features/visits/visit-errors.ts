@@ -1,6 +1,9 @@
 import i18n from '../../i18n';
+import { isNetworkError } from '../../lib/offline-cache';
 
 export function getVisitErrorMessage(error: unknown): string {
+  if (isNetworkError(error)) return i18n.t('offline.actionNotSaved');
+
   const errorText =
     typeof error === 'object' && error !== null
       ? ['code', 'message', 'details', 'hint']

@@ -2,6 +2,7 @@ import { LegalLinks } from './features/legal/LegalDocuments';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { OfflineNotice } from './components/OfflineNotice';
 import { useToast } from './components/toast-context';
 import {
   clearEmailConfirmationRedirectMarker,
@@ -110,6 +111,7 @@ function App() {
           <p>{t('auth.verificationPersistentNotice')}</p>
         </aside>
       )}
+      <OfflineNotice />
       {content}
       <footer className="app-legal-footer"><LegalLinks compact /></footer>
     </>

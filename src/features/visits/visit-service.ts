@@ -1,4 +1,5 @@
 import { supabase } from '../../lib/supabase';
+import { withOfflineCache } from '../../lib/offline-cache';
 import type {
   CreateGroupVisitInput,
   GroupVisitDetails,
@@ -13,6 +14,13 @@ import type {
   VisitStartMode,
   VisitMinor,
 } from './visit-types';
+
+// Without signal an expired token makes supabase-js retry its refresh for about 30 seconds
+// before failing, which would leave the person waiting on a button with no answer.
+function rpcWhenOnline(functionName: string, args?: Record<string, unknown>) {
+  if (!navigator.onLine) throw new TypeError('Failed to fetch');
+  return supabase.rpc(functionName, args);
+}
 
 type ActiveVisitRow = {
   visit_id: string;
@@ -90,31 +98,33 @@ function firstRow<Row>(data: unknown): Row | null {
 }
 
 export async function getVisitMinors(visitId: string): Promise<VisitMinor[]> {
-  const { data, error } = await supabase.rpc('get_visit_minors', {
-    p_visit_id: visitId,
+  return withOfflineCache(`visit-minors:${visitId}`, async () => {
+    const { data, error } = await rpcWhenOnline('get_visit_minors', {
+      p_visit_id: visitId,
+    });
+    if (error) throw error;
+    return (
+      (data ?? []) as Array<{
+        id: string;
+        full_name: string;
+        age: number;
+        sex: 'male' | 'female';
+        relationship: string;
+        responsible_member_id: string;
+        responsible_name: string;
+        operational_status: VisitMinor['operationalStatus'];
+      }>
+    ).map((row) => ({
+      id: row.id,
+      fullName: row.full_name,
+      age: row.age,
+      sex: row.sex,
+      relationship: row.relationship,
+      responsibleMemberId: row.responsible_member_id,
+      responsibleName: row.responsible_name,
+      operationalStatus: row.operational_status,
+    }));
   });
-  if (error) throw error;
-  return (
-    (data ?? []) as Array<{
-      id: string;
-      full_name: string;
-      age: number;
-      sex: 'male' | 'female';
-      relationship: string;
-      responsible_member_id: string;
-      responsible_name: string;
-      operational_status: VisitMinor['operationalStatus'];
-    }>
-  ).map((row) => ({
-    id: row.id,
-    fullName: row.full_name,
-    age: row.age,
-    sex: row.sex,
-    relationship: row.relationship,
-    responsibleMemberId: row.responsible_member_id,
-    responsibleName: row.responsible_name,
-    operationalStatus: row.operational_status,
-  }));
 }
 function mapParticipant(row: ParticipantRow): GroupVisitParticipant {
   return {
@@ -156,31 +166,35 @@ function mapDetails(row: GroupVisitDetailsRow): GroupVisitDetails {
 }
 
 export async function getMyActiveGroupVisit(): Promise<ActiveVisitRow | null> {
-  const { data, error } = await supabase.rpc('get_my_active_group_visit');
+  return withOfflineCache('active-visit', async () => {
+    const { data, error } = await rpcWhenOnline('get_my_active_group_visit');
 
-  if (error) throw error;
-  return firstRow<ActiveVisitRow>(data);
+    if (error) throw error;
+    return firstRow<ActiveVisitRow>(data);
+  });
 }
 
 export async function getGroupVisitDetails(
   visitId: string
 ): Promise<GroupVisitDetails> {
-  const { data, error } = await supabase.rpc('get_group_visit_details', {
-    p_visit_id: visitId,
+  return withOfflineCache(`visit-details:${visitId}`, async () => {
+    const { data, error } = await rpcWhenOnline('get_group_visit_details', {
+      p_visit_id: visitId,
+    });
+
+    if (error) throw error;
+
+    const row = firstRow<GroupVisitDetailsRow>(data);
+    if (!row) throw new Error('Group visit details were not returned');
+
+    return mapDetails(row);
   });
-
-  if (error) throw error;
-
-  const row = firstRow<GroupVisitDetailsRow>(data);
-  if (!row) throw new Error('Group visit details were not returned');
-
-  return mapDetails(row);
 }
 
 export async function createGroupVisit(
   input: CreateGroupVisitInput
 ): Promise<string> {
-  const { data, error } = await supabase.rpc('create_group_visit_with_minors', {
+  const { data, error } = await rpcWhenOnline('create_group_visit_with_minors', {
     p_route_id: input.routeId,
     p_visit_type: input.visitType,
     p_start_mode: input.startMode,
@@ -209,7 +223,7 @@ export async function createGroupVisit(
 }
 
 export async function joinGroupVisit(joinCode: string): Promise<string> {
-  const { data, error } = await supabase.rpc('join_group_visit', {
+  const { data, error } = await rpcWhenOnline('join_group_visit', {
     join_code: joinCode,
     terms_accepted: true,
   });
@@ -228,7 +242,7 @@ async function runVisitAction(
     | 'cancel_group_visit',
   visitId: string
 ): Promise<void> {
-  const { error } = await supabase.rpc(functionName, { visit_id: visitId });
+  const { error } = await rpcWhenOnline(functionName, { visit_id: visitId });
   if (error) throw error;
 }
 
@@ -248,7 +262,7 @@ async function runMemberAction(
   functionName: 'withdraw_from_group' | 'confirm_my_early_checkout',
   visitId: string
 ): Promise<void> {
-  const { error } = await supabase.rpc(functionName, {
+  const { error } = await rpcWhenOnline(functionName, {
     p_visit_id: visitId,
   });
   if (error) throw error;
@@ -266,7 +280,7 @@ export async function removeMemberBeforeStart(
   visitId: string,
   userId: string
 ): Promise<void> {
-  const { error } = await supabase.rpc('remove_member_before_start', {
+  const { error } = await rpcWhenOnline('remove_member_before_start', {
     p_visit_id: visitId,
     p_user_id: userId,
   });
@@ -278,7 +292,7 @@ export async function startEarlyReturn(
   reason: EarlyReturnReason,
   notes: string | null
 ): Promise<void> {
-  const { error } = await supabase.rpc('start_early_return', {
+  const { error } = await rpcWhenOnline('start_early_return', {
     p_visit_id: visitId,
     p_reason: reason,
     p_notes: notes,
@@ -292,7 +306,7 @@ export async function markMemberReturningEarly(
   reason: EarlyReturnReason,
   notes: string | null
 ): Promise<void> {
-  const { error } = await supabase.rpc('mark_member_returning_early', {
+  const { error } = await rpcWhenOnline('mark_member_returning_early', {
     p_visit_id: visitId,
     p_user_id: userId,
     p_reason: reason,
@@ -305,7 +319,7 @@ export async function getMyVisitHistory(
   limit: number,
   offset: number
 ): Promise<VisitHistoryItem[]> {
-  const { data, error } = await supabase.rpc('get_my_visit_history', {
+  const { data, error } = await rpcWhenOnline('get_my_visit_history', {
     p_limit: limit,
     p_offset: offset,
   });
@@ -337,7 +351,7 @@ export async function getMyVisitHistory(
 export async function getVisitHistoryMembers(
   visitId: string
 ): Promise<VisitHistoryMember[]> {
-  const { data, error } = await supabase.rpc('get_visit_history_members', {
+  const { data, error } = await rpcWhenOnline('get_visit_history_members', {
     p_visit_id: visitId,
   });
 
@@ -354,21 +368,21 @@ export async function getVisitHistoryMembers(
 }
 
 export async function changeVisitRoute(visitId: string, routeId: string, returnedToStart = false): Promise<void> {
-  const { error } = await supabase.rpc('change_visit_route', { p_visit_id: visitId, p_route_id: routeId, p_returned_to_start: returnedToStart });
+  const { error } = await rpcWhenOnline('change_visit_route', { p_visit_id: visitId, p_route_id: routeId, p_returned_to_start: returnedToStart });
   if (error) throw error;
 }
 export async function recordMyEarlyReturn(visitId: string, reason: EarlyReturnReason, notes: string | null): Promise<void> {
-  const { error } = await supabase.rpc('record_my_early_return', { p_visit_id: visitId, p_reason: reason, p_notes: notes });
+  const { error } = await rpcWhenOnline('record_my_early_return', { p_visit_id: visitId, p_reason: reason, p_notes: notes });
   if (error) throw error;
 }
 
 export async function addMyVisitMinors(visitId: string, minors: CreateGroupVisitInput['minors'], consent: boolean): Promise<void> {
-  const { error } = await supabase.rpc('add_my_visit_minors', { p_visit_id: visitId,
+  const { error } = await rpcWhenOnline('add_my_visit_minors', { p_visit_id: visitId,
     p_minors: minors.map((minor) => ({ full_name: minor.fullName, age: minor.age, sex: minor.sex, relationship: minor.relationship })),
     p_responsibility_consent_accepted: consent });
   if (error) throw error;
 }
 export async function removeMyVisitMinor(visitId: string, minorId: string): Promise<void> {
-  const { error } = await supabase.rpc('remove_my_visit_minor', { p_visit_id: visitId, p_minor_id: minorId });
+  const { error } = await rpcWhenOnline('remove_my_visit_minor', { p_visit_id: visitId, p_minor_id: minorId });
   if (error) throw error;
 }

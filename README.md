@@ -74,3 +74,14 @@ export default defineConfig([
 
 ```
 "# Volcan-Santa-Maria" 
+
+## Modo sin conexión
+
+La PWA funciona sin señal una vez abierta con conexión al menos una vez:
+
+- **App y mapa:** el build escribe en `sw.js` la lista de archivos (`vite.config.ts`) y el service worker los guarda al instalarse. El mapa base está en `public/map` (PMTiles, relieve y fuentes); `npm run map:offline <fecha>` lo regenera.
+- **Datos:** sesión, perfil, visita activa, rutas y fotos quedan guardados (`src/lib/offline-cache.ts`). Se borran al cerrar sesión.
+- **Satélite:** solo con conexión; sin señal cambia solo al mapa local.
+- **Registros:** requieren conexión. Sin señal la app avisa que no se guardó; no hay cola de envío diferido.
+
+Prueba: `npm run test:offline` (build real en Edge con los servidores apagados; requiere Playwright, ver `PLAYWRIGHT_MODULE_PATH`).
